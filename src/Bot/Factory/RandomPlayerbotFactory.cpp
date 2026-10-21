@@ -80,23 +80,31 @@ Player* RandomPlayerbotFactory::CreateRandomBot(WorldSession* session, uint8 cls
 {
     LOG_DEBUG("playerbots", "Creating a new random bot for class: {}", cls);
 
-    const bool alliance = static_cast<bool>(urand(0, 1));
-
     std::vector<uint8> raceOptions;
-    for (uint8 race = RACE_HUMAN; race < sRaceMgr->GetMaxRaces(); ++race)
+    auto collectRaces = [&](bool alliance)
     {
-        // skip disabled with config races
-        if ((1 << (race - 1)) & sWorld->getIntConfig(CONFIG_CHARACTER_CREATING_DISABLED_RACEMASK))
-            continue;
-
-        // Try to get 50/50 faction distribution for random bot population balance.
-        // Without this check, races from the faction with more class options would dominate.
-        if (alliance == IsAlliance(race))
+        for (uint8 race = RACE_HUMAN; race < sRaceMgr->GetMaxRaces(); ++race)
         {
-            if (IsValidRaceClassCombination(race, cls, sWorld->getIntConfig(CONFIG_EXPANSION)))
-                raceOptions.push_back(race);
+            // skip disabled with config races
+            if ((1 << (race - 1)) & sWorld->getIntConfig(CONFIG_CHARACTER_CREATING_DISABLED_RACEMASK))
+                continue;
+
+            // Try to get 50/50 faction distribution for random bot population balance.
+            // Without this check, races from the faction with more class options would dominate.
+            if (alliance == IsAlliance(race))
+            {
+                if (IsValidRaceClassCombination(race, cls, sWorld->getIntConfig(CONFIG_EXPANSION)))
+                    raceOptions.push_back(race);
+            }
         }
-    }
+    };
+
+    // Single-faction classes (paladin and shaman before TBC) would fail half their rolls and end up
+    // at half the count of every other class: fall back to the faction that can play the class.
+    const bool alliance = static_cast<bool>(urand(0, 1));
+    collectRaces(alliance);
+    if (raceOptions.empty())
+        collectRaces(!alliance);
 
     if (raceOptions.empty())
     {
@@ -693,7 +701,9 @@ void RandomPlayerbotFactory::CreateRandomBots()
         sPlayerbotAIConfig.RandomBotAccounts.push_back(accountId);
 
         uint32 count = AccountMgr::GetCharactersCount(accountId);
-        if (count >= 10)
+        // A full account holds one character per available class: 9 without death knights. Against a
+        // fixed 10, every restart topped such accounts up with an extra warrior and paladin.
+        if (count >= CalculateAvailableCharsPerAccount())
         {
             continue;
         }

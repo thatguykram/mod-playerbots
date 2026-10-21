@@ -5,6 +5,7 @@
  */
 
 #include "GatherNodeMgr.h"
+#include <cmath>
 
 #include <algorithm>
 
@@ -18,10 +19,13 @@
 #include "ObjectMgr.h"
 #include "Player.h"
 #include "PlayerbotAI.h"
+#include "PlayerbotAIConfig.h"
+#include "PlayerbotHooks.h"
 #include "Playerbots.h"
 #include "Random.h"
 #include "SharedDefines.h"
 #include "Timer.h"
+#include "TravelMgr.h"
 
 namespace
 {
@@ -87,6 +91,25 @@ void GatherNodeMgr::Load()
         } while (result->NextRow());
     }
 
+    // Danger per 40-yard cell: the highest level of creature spawned there that attacks players on
+    // sight. A node takes the worst of its own cell and the eight around it.
+    constexpr float DangerCell = 40.0f;
+    auto cellKey = [](uint32 mapId, int32 cx, int32 cy)
+    { return (uint64(mapId) << 32) | (uint64(uint16(cx + 32768)) << 16) | uint64(uint16(cy + 32768)); };
+    auto cellOf = [](float coord) { return int32(std::floor(coord / DangerCell)); };
+    std::unordered_map<uint64, uint8> danger;
+    for (auto const& [spawnId, creatureData] : sObjectMgr->GetAllCreatureData())
+    {
+        CreatureTemplate const* tmpl = sObjectMgr->GetCreatureTemplate(creatureData.id);
+        if (!tmpl || tmpl->type == CREATURE_TYPE_CRITTER)
+            continue;
+        FactionTemplateEntry const* faction = sFactionTemplateStore.LookupEntry(tmpl->faction);
+        if (!faction || !faction->IsHostileToPlayers())
+            continue;
+        uint8& level = danger[cellKey(creatureData.mapid, cellOf(creatureData.posX), cellOf(creatureData.posY))];
+        level = std::max(level, tmpl->maxlevel);
+    }
+
     for (auto const& [spawnId, goData] : sObjectMgr->GetAllGOData())
     {
         // Instances are excluded: the state targets outdoor zone roaming.
@@ -109,6 +132,11 @@ void GatherNodeMgr::Load()
         node.pos = WorldPosition(goData.mapid, goData.posX, goData.posY, goData.posZ);
         node.skillId = skillId;
         node.reqSkillValue = reqSkillValue;
+        for (int32 dx = -1; dx <= 1; ++dx)
+            for (int32 dy = -1; dy <= 1; ++dy)
+                if (auto it = danger.find(cellKey(goData.mapid, cellOf(goData.posX) + dx, cellOf(goData.posY) + dy));
+                    it != danger.end())
+                    node.dangerLevel = std::max(node.dangerLevel, it->second);
         auto zoneItr = dbZoneIds.find(spawnId);
         uint32 zoneId = zoneItr != dbZoneIds.end()
                             ? zoneItr->second
@@ -125,7 +153,25 @@ bool GatherNodeMgr::IsUsable(PlayerbotAI* botAI, Player* bot, GatherNodeSpawn co
     if (!botAI->HasSkill(SkillType(node.skillId)))
         return false;
 
-    return bot->GetSkillValue(node.skillId) >= node.reqSkillValue;
+    if (sPlayerbotAIConfig.GatherMaxMobLevelAbove >= 0 &&
+        int32(node.dangerLevel) > int32(bot->GetLevel()) + sPlayerbotAIConfig.GatherMaxMobLevelAbove)
+        return false;
+
+    if (bot->GetSkillValue(node.skillId) < node.reqSkillValue)
+        return false;
+
+    // Leash for new characters: a node is only worth it near somewhere the bot can level, or one vein
+    // after another walks it out of its start area.
+    if (bot->GetLevel() < sPlayerbotAIConfig.KeepInStartZoneBelowLevel)
+    {
+        constexpr float Leash = 800.0f;
+        for (WorldLocation const& loc : sTravelMgr.GetLocsPerLevelCache(bot->GetLevel()))
+            if (loc.GetMapId() == node.pos.GetMapId() && WorldPosition(loc).sqDistance(node.pos) <= Leash * Leash)
+                return true;
+        return false;
+    }
+
+    return true;
 }
 
 std::vector<GatherNodeSpawn> const* GatherNodeMgr::GetZoneNodes(uint32 mapId, uint32 zoneId) const
@@ -138,29 +184,36 @@ std::vector<GatherNodeSpawn> const* GatherNodeMgr::GetZoneNodes(uint32 mapId, ui
     return zoneItr != mapItr->second.end() ? &zoneItr->second : nullptr;
 }
 
+GatherSearchHook g_GatherSearchHook = nullptr;
+
 bool GatherNodeMgr::HasUsableNodes(Player* bot)
 {
-    std::vector<GatherNodeSpawn> const* nodes = GetZoneNodes(bot->GetMapId(), bot->GetZoneId());
-    if (!nodes)
-        return false;
-
     PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot);
     if (!botAI)
         return false;
 
-    for (GatherNodeSpawn const& node : *nodes)
-        if (IsUsable(botAI, bot, node))
-            return true;
+    if (std::vector<GatherNodeSpawn> const* nodes = GetZoneNodes(bot->GetMapId(), bot->GetZoneId()))
+        for (GatherNodeSpawn const& node : *nodes)
+            if (IsUsable(botAI, bot, node))
+                return true;
+
+    // Skill-up trip: nothing usable here, so look at the other zones within the bot's reach.
+    float reach = g_GatherSearchHook ? g_GatherSearchHook(bot) : 0.0f;
+    auto mapItr = _nodes.find(bot->GetMapId());
+    if (reach <= 0.0f || mapItr == _nodes.end())
+        return false;
+
+    WorldPosition botPos(bot);
+    for (auto const& [zoneId, zoneNodes] : mapItr->second)
+        for (GatherNodeSpawn const& node : zoneNodes)
+            if (botPos.sqDistance(node.pos) <= reach * reach && IsUsable(botAI, bot, node))
+                return true;
 
     return false;
 }
 
 GatherNodeSpawn const* GatherNodeMgr::GetNextNode(Player* bot, std::unordered_set<ObjectGuid::LowType> const& visited)
 {
-    std::vector<GatherNodeSpawn> const* nodes = GetZoneNodes(bot->GetMapId(), bot->GetZoneId());
-    if (!nodes)
-        return nullptr;
-
     PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot);
     if (!botAI)
         return nullptr;
@@ -169,19 +222,42 @@ GatherNodeSpawn const* GatherNodeMgr::GetNextNode(Player* bot, std::unordered_se
     WorldPosition botPos(bot);
 
     std::vector<std::pair<float, GatherNodeSpawn const*>> candidates;
-    for (GatherNodeSpawn const& node : *nodes)
+    auto collect = [&](std::vector<GatherNodeSpawn> const& nodes, float maxDist)
     {
-        if (visited.contains(node.spawnId) || !IsUsable(botAI, bot, node))
-            continue;
+        for (GatherNodeSpawn const& node : nodes)
+        {
+            if (visited.contains(node.spawnId) || !IsUsable(botAI, bot, node))
+                continue;
 
-        // Don't route to spawn points we can already see to be empty.
-        // Evaluated fresh on every selection so respawns come back into
-        // the pool naturally.
-        if (IsVerifiablyDown(map, node.pos, node.spawnId))
-            continue;
+            // Don't route to spawn points we can already see to be empty.
+            // Evaluated fresh on every selection so respawns come back into
+            // the pool naturally.
+            if (IsVerifiablyDown(map, node.pos, node.spawnId))
+                continue;
 
-        candidates.push_back({botPos.sqDistance(node.pos), &node});
-    }
+            // Walking across the zone to a far node takes a low-level bot through whatever lives in between.
+            float sqDist = botPos.sqDistance(node.pos);
+            if (maxDist > 0.0f && sqDist > maxDist * maxDist)
+                continue;
+
+            if (g_DestinationHook &&
+                !g_DestinationHook(bot, node.pos.GetMapId(), node.pos.GetPositionX(), node.pos.GetPositionY()))
+                continue;
+
+            candidates.push_back({sqDist, &node});
+        }
+    };
+
+    if (std::vector<GatherNodeSpawn> const* nodes = GetZoneNodes(bot->GetMapId(), bot->GetZoneId()))
+        collect(*nodes, sPlayerbotAIConfig.GatherMaxNodeDistance);
+
+    // Skill-up trip: nothing usable in this zone, so the other zones of the map within the bot's reach.
+    float reach = g_GatherSearchHook ? g_GatherSearchHook(bot) : 0.0f;
+    auto mapItr = _nodes.find(bot->GetMapId());
+    if (candidates.empty() && reach > 0.0f && mapItr != _nodes.end())
+        for (auto const& [zoneId, zoneNodes] : mapItr->second)
+            if (zoneId != bot->GetZoneId())
+                collect(zoneNodes, reach);
 
     if (candidates.empty())
         return nullptr;

@@ -23,6 +23,7 @@
 #include "PathGenerator.h"
 #include "Player.h"
 #include "PlayerbotAI.h"
+#include "PlayerbotHooks.h"
 #include "PlayerbotTextMgr.h"
 #include "QuestDef.h"
 #include "Random.h"
@@ -550,8 +551,9 @@ bool NewRpgDoQuestAction::DoIncompleteQuest(NewRpgInfo::DoQuest& data)
         data.lastReachPOI = getMSTime();
         return true;
     }
-    // stayed at this POI for more than 5 minutes
-    if (GetMSTimeDiffToNow(data.lastReachPOI) >= poiStayTime)
+    // stayed at this POI for more than 5 minutes (or the bot's own patience)
+    uint32 patience = g_QuestPatienceHook ? g_QuestPatienceHook(bot, poiStayTime) : poiStayTime;
+    if (GetMSTimeDiffToNow(data.lastReachPOI) >= patience)
     {
         bool hasProgression = false;
         int32 currentObjective = data.objectiveIdx;

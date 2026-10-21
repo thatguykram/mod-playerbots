@@ -36,6 +36,7 @@
 #include "Player.h"
 #include "PlayerbotAIConfig.h"
 #include "PlayerbotGuildMgr.h"
+#include "PlayerbotHooks.h"
 #include "PlayerbotMgr.h"
 #include "PlayerbotTextMgr.h"
 #include "Playerbots.h"
@@ -463,6 +464,8 @@ bool PlayerbotAI::UpdateAIReaction(uint32 elapsed, bool minimal, bool canControl
     return reactionInProgress;
 }
 
+CombatActionDelayHook g_CombatActionDelayHook = nullptr;
+
 void PlayerbotAI::SetActionDuration(Action const* action)
 {
     if (!action)
@@ -474,7 +477,12 @@ void PlayerbotAI::SetActionDuration(Action const* action)
             reactionEngine->SetReactionDuration(action);
     }
     else
-        PlayerbotAIBase::SetActionDuration(action->GetDuration());
+    {
+        uint32 duration = action->GetDuration();
+        if (g_CombatActionDelayHook && bot && bot->IsInCombat())
+            duration = g_CombatActionDelayHook(bot, duration);
+        PlayerbotAIBase::SetActionDuration(duration);
+    }
 }
 
 // Helper function for UpdateAI to check group membership and handle removal if necessary

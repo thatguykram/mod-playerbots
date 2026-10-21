@@ -5,6 +5,9 @@
  */
 
 #include "RandomPlayerbotMgr.h"
+#include "PlayerbotHooks.h"
+
+KeepRandomBotGroupHook g_KeepRandomBotGroupHook = nullptr;
 #include "PlayerbotsDatabase.h"
 #include "AiFactory.h"
 #include "Battleground.h"
@@ -651,6 +654,8 @@ bool RandomPlayerbotMgr::IsAddClassAccount(uint32 accountId) const
            addClassTypeAccounts.end();
 }
 
+RandomBotLoginHook g_RandomBotLoginHook = nullptr;
+
 // Logs-in bots in 4 phases. Phase 1 logs Alliance bots up to how much is expected according to the faction ratio,
 // and Phase 2 logs-in the remainder Horde bots to reach the total maxAllowedBotCount. If maxAllowedBotCount is not
 // reached after Phase 2, the function goes back to log-in Alliance bots and reach maxAllowedBotCount. This is done
@@ -710,6 +715,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
         struct CharacterInfo
         {
             uint32 guid;
+            uint8 level;
             uint8 rClass;
             uint8 rRace;
             uint32 accountId;
@@ -730,6 +736,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 Field* fields = result->Fetch();
                 CharacterInfo info;
                 info.guid = fields[0].Get<uint32>();
+                info.level = fields[2].Get<uint8>();
                 info.rRace = fields[3].Get<uint8>();
                 info.rClass = fields[4].Get<uint8>();
                 info.accountId = accountId;
@@ -760,7 +767,8 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 GetEventValue(charInfo.guid, "logout") ||
                 GetPlayerBot(charInfo.guid) ||
                 currentBots.contains(charInfo.guid) ||
-                (sPlayerbotAIConfig.DisableDeathKnightLogin && charInfo.rClass == CLASS_DEATH_KNIGHT))
+                (sPlayerbotAIConfig.DisableDeathKnightLogin && charInfo.rClass == CLASS_DEATH_KNIGHT) ||
+                (g_RandomBotLoginHook && !g_RandomBotLoginHook(charInfo.guid, charInfo.level)))
             {
                 return false;
             }
@@ -1526,9 +1534,10 @@ bool RandomPlayerbotMgr::ProcessBot(Player* bot)
         return false;
     }
 
-    // leave group if leader is rndbot
+    // leave group if leader is rndbot (unless another module keeps the party together)
     Group* group = bot->GetGroup();
-    if (group && !group->isLFGGroup() && IsRandomBot(group->GetLeader()))
+    if (group && !group->isLFGGroup() && IsRandomBot(group->GetLeader()) &&
+        !(g_KeepRandomBotGroupHook && g_KeepRandomBotGroupHook(bot, group)))
     {
         botAI->LeaveOrDisbandGroup();
         LOG_INFO("playerbots", "Bot {} remove from group since leader is random bot.", bot->GetName().c_str());
@@ -1624,6 +1633,10 @@ void RandomPlayerbotMgr::RandomTeleport(Player* bot, std::vector<WorldLocation>&
 {
     // ignore when alrdy teleported or not in the world yet.
     if (bot->IsBeingTeleported() || !bot->IsInWorld())
+        return;
+
+    // new characters stay in their starting zone, like players do
+    if (bot->GetLevel() < sPlayerbotAIConfig.KeepInStartZoneBelowLevel)
         return;
 
     // no teleport / movement update when rooted.
@@ -1806,6 +1819,9 @@ void RandomPlayerbotMgr::Init()
 
     if (sPlayerbotAIConfig.RandomBotJoinBG)
         sRandomPlayerbotMgr.LoadBattleMastersCache();
+
+    if (sPlayerbotAIConfig.KeepBotsOnRestart)
+        return;
 
     PlayerbotsDatabasePreparedStatement* stmt = PlayerbotsDatabase.GetPreparedStatement(PLAYERBOTS_DEL_RANDOM_BOTS_BY_EVENT);
     stmt->SetData(0, std::string("add"));
@@ -2214,7 +2230,8 @@ void RandomPlayerbotMgr::Refresh(Player* bot)
 
     botAI->Reset();
 
-    bot->DurabilityRepairAll(false, 1.0f, false);
+    if (sPlayerbotAIConfig.RefreshHandouts)
+        bot->DurabilityRepairAll(false, 1.0f, false);
     bot->SetFullHealth();
     bot->SetPvP(sWorld->IsPvPRealm());
     PlayerbotFactory factory(bot, bot->GetLevel());
@@ -2226,10 +2243,13 @@ void RandomPlayerbotMgr::Refresh(Player* bot)
     if (bot->GetMaxPower(POWER_ENERGY) > 0)
         bot->SetPower(POWER_ENERGY, bot->GetMaxPower(POWER_ENERGY));
 
-    uint32 money = bot->GetMoney();
-    bot->SetMoney(money + 500 * sqrt(urand(1, bot->GetLevel() * 5)));
+    if (sPlayerbotAIConfig.RefreshHandouts)
+    {
+        uint32 money = bot->GetMoney();
+        bot->SetMoney(money + 500 * sqrt(urand(1, bot->GetLevel() * 5)));
+    }
 
-    if (bot->GetGroup())
+    if (bot->GetGroup() && !(g_KeepRandomBotGroupHook && g_KeepRandomBotGroupHook(bot, bot->GetGroup())))
         botAI->LeaveOrDisbandGroup();
 
     if (pmo)

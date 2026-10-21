@@ -5,6 +5,7 @@
  */
 
 #include "NewRpgBaseAction.h"
+#include "PlayerbotHooks.h"
 #include "BroadcastHelper.h"
 #include "ChatHelper.h"
 #include "Creature.h"
@@ -37,6 +38,19 @@
 #include "Timer.h"
 #include "TravelMgr.h"
 #include "G3D/Vector2.h"
+
+RpgStatusWeightHook g_RpgStatusWeightHook = nullptr;
+QuestWorthHook g_QuestWorthHook = nullptr;
+QuestPatienceHook g_QuestPatienceHook = nullptr;
+DestinationHook g_DestinationHook = nullptr;
+
+namespace
+{
+    bool DestinationOk(Player* bot, WorldLocation const& loc)
+    {
+        return !g_DestinationHook || g_DestinationHook(bot, loc.GetMapId(), loc.GetPositionX(), loc.GetPositionY());
+    }
+}
 
 bool NewRpgBaseAction::MoveFarTo(WorldPosition dest)
 {
@@ -280,6 +294,9 @@ bool NewRpgBaseAction::MoveRandomNear(float moveStep, MovementPriority priority,
             continue;
 
         if (map->IsInWater(bot->GetPhaseMask(), dx, dy, dz, bot->GetCollisionHeight()))
+            continue;
+
+        if (g_DestinationHook && !g_DestinationHook(bot, bot->GetMapId(), dx, dy))
             continue;
 
         bool moved = MoveTo(bot->GetMapId(), dx, dy, dz, false, false, false, true, priority);
@@ -575,6 +592,9 @@ bool NewRpgBaseAction::IsQuestWorthDoing(Quest const* quest)
     if (quest->IsSeasonal())
         return false;
 
+    if (g_QuestWorthHook && !g_QuestWorthHook(bot, quest))
+        return false;
+
     return true;
 }
 
@@ -584,15 +604,17 @@ bool NewRpgBaseAction::IsQuestCapableDoing(Quest const* quest)
     if (highLevelQuest)
         return false;
 
-    // Elite quest and dungeon quest etc
-    if (quest->GetType() != 0)
+    // Solo quests always; open-world elite and group quests only with a big enough group behind
+    // the bot. Dungeon, raid and other quest types still need content we can't run yet.
+    bool needsGroup = quest->GetType() != 0 || quest->GetSuggestedPlayers() >= 2;
+    if (!needsGroup)
+        return true;
+
+    if (quest->GetType() != 0 && quest->GetType() != QUEST_TYPE_ELITE)
         return false;
 
-    // now we only capable of doing solo quests
-    if (quest->GetSuggestedPlayers() >= 2)
-        return false;
-
-    return true;
+    Group* group = bot->GetGroup();
+    return group && group->GetMembersCount() >= std::max<uint32>(2, quest->GetSuggestedPlayers());
 }
 
 bool NewRpgBaseAction::OrganizeQuestLog()
@@ -940,14 +962,25 @@ bool NewRpgBaseAction::GetQuestPOIPosAndObjectiveIdx(uint32 questId, std::vector
             continue;
         if (qPoi.points.size() == 0)
             continue;
+        // A random spot inside the objective's area; with a destination check, re-roll spots at an edge
+        // that runs into something too dangerous, and give up on the area if every try does.
         float dx = 0, dy = 0;
-        std::vector<float> weights = GenerateRandomWeights(qPoi.points.size());
-        for (size_t i = 0; i < qPoi.points.size(); i++)
+        bool safe = false;
+        for (int attempt = 0; attempt < (g_DestinationHook ? 5 : 1) && !safe; ++attempt)
         {
-            QuestPOIPoint const& point = qPoi.points[i];
-            dx += point.x * weights[i];
-            dy += point.y * weights[i];
+            dx = 0;
+            dy = 0;
+            std::vector<float> weights = GenerateRandomWeights(qPoi.points.size());
+            for (size_t i = 0; i < qPoi.points.size(); i++)
+            {
+                QuestPOIPoint const& point = qPoi.points[i];
+                dx += point.x * weights[i];
+                dy += point.y * weights[i];
+            }
+            safe = !g_DestinationHook || g_DestinationHook(bot, bot->GetMapId(), dx, dy);
         }
+        if (!safe)
+            continue;
 
         if (bot->GetDistance2d(dx, dy) >= 1500.0f)
             continue;
@@ -991,27 +1024,51 @@ WorldPosition NewRpgBaseAction::SelectRandomGrindPos(Player* bot)
             inCity = true;
     }
 
-    for (auto& loc : locs)
+    // Second pass (only with a destination check to keep the way safe): nothing for this level left in
+    // the zone, so look past its border, the way a player moves on to the next zone.
+    for (bool anyZone : { false, true })
     {
-        if (bot->GetMapId() != loc.GetMapId())
-            continue;
+        if (anyZone && (!g_DestinationHook || !lo_prepared_locs.empty()))
+            break;
 
-        if (bot->GetExactDist(loc) > 2500.0f)
-            continue;
-
-        if (!inCity && bot->GetMap()->GetZoneId(bot->GetPhaseMask(), loc.GetPositionX(), loc.GetPositionY(),
-                                                loc.GetPositionZ()) != bot->GetZoneId())
-            continue;
-
-        if (bot->GetExactDist(loc) < hiRange)
+        for (auto& loc : locs)
         {
-            hi_prepared_locs.push_back(loc);
-        }
+            if (bot->GetMapId() != loc.GetMapId())
+                continue;
 
-        if (bot->GetExactDist(loc) < loRange)
-        {
-            lo_prepared_locs.push_back(loc);
+            if (bot->GetExactDist(loc) > 2500.0f)
+                continue;
+
+            if (!inCity && !anyZone &&
+                bot->GetMap()->GetZoneId(bot->GetPhaseMask(), loc.GetPositionX(), loc.GetPositionY(),
+                                         loc.GetPositionZ()) != bot->GetZoneId())
+                continue;
+
+            if (!DestinationOk(bot, loc))
+                continue;
+
+            if (bot->GetExactDist(loc) < hiRange)
+            {
+                hi_prepared_locs.push_back(loc);
+            }
+
+            if (bot->GetExactDist(loc) < loRange)
+            {
+                lo_prepared_locs.push_back(loc);
+            }
         }
+    }
+    // Stranded (a gathering trip or a chase took it far from anything its level): head for the nearest
+    // spot for its level on the map, however far, instead of idling where nothing fits.
+    if (lo_prepared_locs.empty())
+    {
+        float nearest = 0.0f;
+        for (auto& loc : locs)
+            if (bot->GetMapId() == loc.GetMapId() && (lo_prepared_locs.empty() || bot->GetExactDist(loc) < nearest))
+            {
+                nearest = bot->GetExactDist(loc);
+                lo_prepared_locs.assign(1, loc);
+            }
     }
     WorldPosition dest{};
     if (urand(1, 100) <= 50 && !hi_prepared_locs.empty())
@@ -1055,6 +1112,9 @@ WorldPosition NewRpgBaseAction::SelectRandomCampPos(Player* bot)
         if (bot->GetExactDist(loc) < 50.0f)
             continue;
 
+        if (!DestinationOk(bot, loc))
+            continue;
+
         if (!inCity && bot->GetMap()->GetZoneId(bot->GetPhaseMask(), loc.GetPositionX(), loc.GetPositionY(),
                                                 loc.GetPositionZ()) != bot->GetZoneId())
             continue;
@@ -1091,19 +1151,29 @@ bool NewRpgBaseAction::SelectRandomFlightTaxiNode(uint32& flightMasterEntry, Wor
     return true;
 }
 
+
 bool NewRpgBaseAction::RandomChangeStatus(std::vector<NewRpgStatus> candidateStatus)
 {
+    auto weightOf = [this](NewRpgStatus status)
+    {
+        uint32 configured = sPlayerbotAIConfig.RpgStatusProbWeight[status];
+        return g_RpgStatusWeightHook ? g_RpgStatusWeightHook(bot, status, configured) : configured;
+    };
+
     std::vector<NewRpgStatus> availableStatus;
+    std::vector<uint32> availableWeight;
     uint32 probSum = 0;
     for (NewRpgStatus status : candidateStatus)
     {
-        if (sPlayerbotAIConfig.RpgStatusProbWeight[status] == 0)
+        uint32 weight = weightOf(status);
+        if (weight == 0)
             continue;
 
         if (CheckRpgStatusAvailable(status))
         {
             availableStatus.push_back(status);
-            probSum += sPlayerbotAIConfig.RpgStatusProbWeight[status];
+            availableWeight.push_back(weight);
+            probSum += weight;
         }
     }
     // Safety check. Default to "rest" if all RPG weights = 0
@@ -1116,12 +1186,12 @@ bool NewRpgBaseAction::RandomChangeStatus(std::vector<NewRpgStatus> candidateSta
     uint32 rand = urand(1, probSum);
     uint32 accumulate = 0;
     NewRpgStatus chosenStatus = RPG_STATUS_END;
-    for (NewRpgStatus status : availableStatus)
+    for (std::size_t i = 0; i < availableStatus.size(); ++i)
     {
-        accumulate += sPlayerbotAIConfig.RpgStatusProbWeight[status];
+        accumulate += availableWeight[i];
         if (accumulate >= rand)
         {
-            chosenStatus = status;
+            chosenStatus = availableStatus[i];
             break;
         }
     }

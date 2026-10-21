@@ -25,6 +25,7 @@ struct GatherNodeSpawn
     WorldPosition pos{};
     uint32 skillId{0};  // SKILL_HERBALISM or SKILL_MINING
     uint32 reqSkillValue{0};
+    uint8 dangerLevel{0};  // highest level of player-hostile creature spawned within ~60 yards
 };
 
 /// Index of gatherable gameobject spawns (herbs/veins) on continent maps,

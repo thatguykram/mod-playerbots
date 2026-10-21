@@ -28,6 +28,7 @@
 #include "PlayerbotAI.h"
 #include "PlayerbotAIConfig.h"
 #include "PlayerbotGuildMgr.h"
+#include "PlayerbotHooks.h"
 #include "PlayerbotRepository.h"
 #include "PlayerbotSpellRepository.h"
 #include "Playerbots.h"
@@ -1095,34 +1096,42 @@ void PlayerbotFactory::Refresh()
     // {
     //     InitEquipment(true);
     // }
-    InitAttunementQuests();
-    ClearInventory();
-    InitAmmo();
-    InitFood();
-    InitReagents();
-    InitConsumables();
-    InitPotions();
+    bool const handouts = sPlayerbotAIConfig.RefreshHandouts;
+    if (handouts)
+    {
+        InitAttunementQuests();
+        ClearInventory();
+        InitAmmo();
+        InitFood();
+        InitReagents();
+        InitConsumables();
+        InitPotions();
+    }
     InitPet();
     InitPetTalents();
     InitSkills();
     InitClassSpells();
     InitAvailableSpells();
-    InitReputation();
-    InitSpecialSpells();
-    InitMounts();
-    InitKeyring();
+    if (handouts)
+    {
+        InitReputation();
+        InitSpecialSpells();
+        InitMounts();
+        InitKeyring();
+    }
     if (!sPlayerbotAIConfig.EquipAndSpecPersistence ||
         bot->GetLevel() < sPlayerbotAIConfig.EquipAndSpecPersistenceLevel)
     {
         InitTalentsTree(true, true, true);
     }
-    if (bot->GetLevel() >= sPlayerbotAIConfig.MinEnchantingBotLevel)
+    if (handouts && bot->GetLevel() >= sPlayerbotAIConfig.MinEnchantingBotLevel)
         ApplyEnchantAndGemsNew();
-    bot->DurabilityRepairAll(false, 1.0f, false);
+    if (handouts)
+        bot->DurabilityRepairAll(false, 1.0f, false);
     if (bot->isDead())
         bot->ResurrectPlayer(1.0f, false);
     uint32 money = urand(level * 1000, level * 5 * 1000);
-    if (bot->GetMoney() < money)
+    if (handouts && bot->GetMoney() < money)
         bot->SetMoney(money);
     // bot->SaveToDB(false, false);
 }
@@ -1705,6 +1714,8 @@ void PlayerbotFactory::ResetQuests()
     }
 }
 
+TalentPlanHook g_TalentPlanHook = nullptr;
+
 uint32 PlayerbotFactory::InitTalentsTree(bool increment /*false*/, bool use_template /*true*/, bool reset /*false*/)
 {
     uint32 specTab;
@@ -1757,6 +1768,9 @@ uint32 PlayerbotFactory::InitTalentsTree(bool increment /*false*/, bool use_temp
             LOG_ERROR("playerbots", "Fail to select spec num for bot {}! Set to 0.", bot->GetName());
         }
     }
+    if (g_TalentPlanHook)
+        specTab = g_TalentPlanHook(bot, specTab, !(increment && total_tabs != 0), use_template);
+
     if (reset)
     {
         bot->resetTalents(true);
@@ -1765,6 +1779,11 @@ uint32 PlayerbotFactory::InitTalentsTree(bool increment /*false*/, bool use_temp
     if (use_template)
     {
         InitTalentsByTemplate(specTab);
+    }
+    else
+    {
+        // spec index 3 is the druid's cat build, in the feral tree
+        InitTalents(cls == CLASS_DRUID && specTab == 3 ? DRUID_TAB_FERAL : specTab);
     }
     // if LimitTalentsExpansion = 1 there may be unused talent points
     if (bot->GetFreeTalentPoints())

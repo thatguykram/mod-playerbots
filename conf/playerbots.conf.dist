@@ -1628,6 +1628,38 @@ Playerbots.RandomBotTeleHigherLevel = 3
 # Default: 1 (enabled)
 Playerbots.AutoTeleportForLevel = 1
 
+# Randombots below this level are never teleported (creation, level-up, periodic and revive
+# teleports), so new characters stay and quest in their race's starting zone like players do.
+# Default: 0 (disabled)
+Playerbots.KeepInStartZoneBelowLevel = 0
+
+#    Playerbots.RefreshHandouts
+#        Description: A randombot refresh (periodic teleport, revive) clears its bags and hands out
+#                     ammo, food, reagents, consumables, potions, mounts, reputation, keys, enchants,
+#                     a free repair and money. Set 0 to keep only what a trainer would give (spells,
+#                     skills, talents, pet), so bots live off what they loot and buy.
+#        Default:     1 (enabled)
+Playerbots.RefreshHandouts = 1
+
+#    Playerbots.KeepBotsOnRestart
+#        Description: Randombots that were logged in come back after a restart (until their in-world
+#                     time runs out) instead of a new random set being picked at every startup.
+#        Default:     0 (disabled)
+Playerbots.KeepBotsOnRestart = 0
+
+#    Playerbots.GatherMaxMobLevelAbove
+#        Description: Gathering bots pick herb and ore nodes anywhere in their zone. With this set, a
+#                     node is skipped when a creature that attacks players on sight, more than this
+#                     many levels above the bot, is spawned within ~60 yards of it. -1 = no check.
+#        Default:     -1
+Playerbots.GatherMaxMobLevelAbove = -1
+
+#    Playerbots.GatherMaxNodeDistance
+#        Description: Gathering bots only pick a next node within this many yards of where they stand
+#                     (0 = anywhere in the zone).
+#        Default:     0
+Playerbots.GatherMaxNodeDistance = 0
+
 #
 #
 ####################################################################################################

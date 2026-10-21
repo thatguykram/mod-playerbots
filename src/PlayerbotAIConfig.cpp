@@ -730,6 +730,11 @@ bool PlayerbotAIConfig::Initialize()
     AutoLearnTrainerSpells = sConfigMgr->GetOption<bool>("Playerbots.AutoLearnTrainerSpells", true);
     AutoLearnQuestSpells = sConfigMgr->GetOption<bool>("Playerbots.AutoLearnQuestSpells", true);
     AutoTeleportForLevel = sConfigMgr->GetOption<bool>("Playerbots.AutoTeleportForLevel", false);
+    KeepInStartZoneBelowLevel = sConfigMgr->GetOption<uint32>("Playerbots.KeepInStartZoneBelowLevel", 0);
+    RefreshHandouts = sConfigMgr->GetOption<bool>("Playerbots.RefreshHandouts", true);
+    KeepBotsOnRestart = sConfigMgr->GetOption<bool>("Playerbots.KeepBotsOnRestart", false);
+    GatherMaxMobLevelAbove = sConfigMgr->GetOption<int32>("Playerbots.GatherMaxMobLevelAbove", -1);
+    GatherMaxNodeDistance = sConfigMgr->GetOption<float>("Playerbots.GatherMaxNodeDistance", 0.0f);
     AutoDoQuests = sConfigMgr->GetOption<bool>("Playerbots.AutoDoQuests", true);
     EnableNewRpgStrategy = sConfigMgr->GetOption<bool>("Playerbots.EnableNewRpgStrategy", true);
 

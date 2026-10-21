@@ -400,6 +400,11 @@ public:
     bool RandomBotConcentrateInPlayerZone;
     bool AutoLearnQuestSpells;
     bool AutoTeleportForLevel;
+    uint32 KeepInStartZoneBelowLevel;
+    bool RefreshHandouts;
+    bool KeepBotsOnRestart;
+    int32 GatherMaxMobLevelAbove;
+    float GatherMaxNodeDistance;
     bool RandomBotGroupNearby;
     int32 EnableRandomBotTrading;
     uint32 TweakValue;  // Debugging config

@@ -6,6 +6,7 @@
 
 #include "LeaveGroupAction.h"
 #include "Event.h"
+#include "PlayerbotHooks.h"
 #include "PlayerbotAIConfig.h"
 #include "PlayerbotTextMgr.h"
 #include "Playerbots.h"
@@ -110,6 +111,9 @@ bool LeaveFarAwayAction::isUseful()
         return false;
 
     if (!bot->GetGroup())
+        return false;
+
+    if (g_KeepRandomBotGroupHook && g_KeepRandomBotGroupHook(bot, bot->GetGroup()))
         return false;
 
     Player* groupLeader = botAI->GetGroupLeader();
