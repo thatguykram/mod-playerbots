@@ -276,6 +276,15 @@ bool NewRpgStatusUpdateAction::Execute(Event /*event*/)
             // GO_CAMP -> WANDER_NPC
             if (bot->GetExactDist(originalPos) < 10.0f)
             {
+                // Camps are the inns of zones for the bot's level: make this one home, like a player
+                // binding at the inn where they quest.
+                WorldPosition home(bot->m_homebindMapId, bot->m_homebindX, bot->m_homebindY, bot->m_homebindZ);
+                if (home.GetMapId() != bot->GetMapId() || bot->GetExactDist(home) > 50.0f)
+                {
+                    bot->SetHomebind(WorldLocation(*bot), bot->GetAreaId());
+                    LOG_DEBUG("playerbots", "[New RPG] Bot {} binds its hearthstone at area {}", bot->GetName(),
+                              bot->GetAreaId());
+                }
                 info.ChangeToWanderNpc();
                 return true;
             }

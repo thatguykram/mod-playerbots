@@ -14,6 +14,7 @@
 #include "GossipDef.h"
 #include "GridTerrainData.h"
 #include "IVMapMgr.h"
+#include "MapMgr.h"
 #include "NewRpgInfo.h"
 #include "NewRpgStrategy.h"
 #include "Object.h"
@@ -37,6 +38,7 @@
 #include "StatsWeightCalculator.h"
 #include "Timer.h"
 #include "TravelMgr.h"
+#include "TravelNode.h"
 #include "G3D/Vector2.h"
 
 RpgStatusWeightHook g_RpgStatusWeightHook = nullptr;
@@ -1005,7 +1007,7 @@ bool NewRpgBaseAction::GetQuestPOIPosAndObjectiveIdx(uint32 questId, std::vector
     return true;
 }
 
-WorldPosition NewRpgBaseAction::SelectRandomGrindPos(Player* bot)
+WorldPosition NewRpgBaseAction::SelectRandomGrindPos(Player* bot, bool* stranded)
 {
     std::vector<WorldLocation> const& locs = sTravelMgr.GetLocsPerLevelCache(bot->GetLevel());
     float hiRange = 500.0f;
@@ -1058,6 +1060,8 @@ WorldPosition NewRpgBaseAction::SelectRandomGrindPos(Player* bot)
             }
         }
     }
+    if (stranded)
+        *stranded = lo_prepared_locs.empty();
     // Stranded (a gathering trip or a chase took it far from anything its level): head for the nearest
     // spot for its level on the map, however far, instead of idling where nothing fits.
     if (lo_prepared_locs.empty())
@@ -1085,6 +1089,48 @@ WorldPosition NewRpgBaseAction::SelectRandomGrindPos(Player* bot)
               bot->GetName(), dest.GetMapId(), dest.GetPositionX(), dest.GetPositionY(), dest.GetPositionZ(),
               hi_prepared_locs.size(), lo_prepared_locs.size() - hi_prepared_locs.size(), locs.size());
     return dest;
+}
+
+// Stranded far from anything for its level, the way a player gets there: hearth home if home is a place
+// for its level, else fly to the flight master nearest the spot (bots know every flight path). Walking it,
+// the caller's fallback, swims seas and crosses enemy zones.
+bool NewRpgBaseAction::HeadForStrandedGrind(WorldPosition const& dest)
+{
+    constexpr uint32 Hearthstone = 6948;
+    constexpr uint32 SpellHearthstone = 8690;
+    constexpr float HomeReach = 1000.0f;
+
+    WorldPosition home(bot->m_homebindMapId, bot->m_homebindX, bot->m_homebindY, bot->m_homebindZ);
+    bool homeFits = false;
+    if (bot->m_homebindAreaId && bot->GetMap()->GetZoneId(bot->GetPhaseMask(), bot->GetPositionX(),
+            bot->GetPositionY(), bot->GetPositionZ()) != sMapMgr->GetZoneId(bot->GetPhaseMask(), home.GetMapId(),
+            home.GetPositionX(), home.GetPositionY(), home.GetPositionZ()))
+        for (WorldLocation const& loc : sTravelMgr.GetLocsPerLevelCache(bot->GetLevel()))
+            if (loc.GetMapId() == home.GetMapId() && home.GetExactDist2d(loc.GetPositionX(), loc.GetPositionY()) < HomeReach)
+            {
+                homeFits = true;
+                break;
+            }
+    if (homeFits && bot->HasItemCount(Hearthstone, 1) && !bot->HasSpellCooldown(SpellHearthstone) &&
+        botAI->DoSpecificAction("hearthstone", Event(), true))
+    {
+        LOG_DEBUG("playerbots", "[New RPG] Bot {} stranded, hearths home to area {}", bot->GetName(), bot->m_homebindAreaId);
+        botAI->rpgInfo.ChangeToIdle();
+        return true;
+    }
+
+    TravelMgr::FlightMasterInfo const* from = sTravelMgr.GetNearestFlightMasterInfo(bot);
+    TravelMgr::FlightMasterInfo const* to = sTravelMgr.GetNearestFlightMasterInfo(bot->GetTeamId(), dest);
+    if (!from || !to || !from->taxiNodeId || !to->taxiNodeId || from->taxiNodeId == to->taxiNodeId ||
+        bot->GetExactDist(from->pos) + dest.GetExactDist(to->pos) > bot->GetExactDist(dest))
+        return false;
+    std::vector<uint32> path = sTravelNodeMap.FindTaxiPath(from->taxiNodeId, to->taxiNodeId);
+    if (path.empty())
+        return false;
+    LOG_DEBUG("playerbots", "[New RPG] Bot {} stranded, flies from node {} to node {} for ({},{})", bot->GetName(),
+              from->taxiNodeId, to->taxiNodeId, dest.GetPositionX(), dest.GetPositionY());
+    botAI->rpgInfo.ChangeToTravelFlight(from->templateEntry, from->pos, std::move(path));
+    return true;
 }
 
 WorldPosition NewRpgBaseAction::SelectRandomCampPos(Player* bot)
@@ -1210,9 +1256,12 @@ bool NewRpgBaseAction::RandomChangeStatus(std::vector<NewRpgStatus> candidateSta
         }
         case RPG_GO_GRIND:
         {
-            WorldPosition pos = SelectRandomGrindPos(bot);
+            bool stranded = false;
+            WorldPosition pos = SelectRandomGrindPos(bot, &stranded);
             if (pos != WorldPosition())
             {
+                if (stranded && HeadForStrandedGrind(pos))
+                    return true;
                 botAI->rpgInfo.ChangeToGoGrind(pos);
                 return true;
             }
