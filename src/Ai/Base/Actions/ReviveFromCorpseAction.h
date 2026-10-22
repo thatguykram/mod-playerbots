@@ -10,8 +10,16 @@
 #include "MovementActions.h"
 
 class PlayerbotAI;
+class Player;
 
 struct GraveyardStruct;
+
+// Is (x, y, z) in deep (fatigue) water: a body there is lost at sea.
+bool InDeepWater(Player* bot, uint32 mapId, float x, float y, float z);
+// Can the bot come back to life at (x, y, z): not in deep water, and not among mobs far above it.
+bool BotCanReviveAt(Player* bot, uint32 mapId, float x, float y, float z);
+// The graveyard nearest the inn the bot's hearthstone is bound to.
+GraveyardStruct const* HomeGraveyard(Player* bot);
 
 class ReviveFromCorpseAction : public MovementAction
 {

@@ -54,6 +54,11 @@ extern CombatActionDelayHook g_CombatActionDelayHook;
 using DestinationHook = bool (*)(Player* bot, uint32 mapId, float x, float y);
 extern DestinationHook g_DestinationHook;
 
+// Per-bot place check, without the way there: is (x, y) somewhere the bot can safely be? Used for random
+// teleports and for where a dead bot comes back to life. Called on the bot's map thread and the world thread.
+using SafePlaceHook = bool (*)(Player* bot, uint32 mapId, float x, float y);
+extern SafePlaceHook g_SafePlaceHook;
+
 // Per-bot gathering reach: when the bot's zone has no node it can use (its skill outgrew the zone, or lags
 // behind it), how many yards it will travel to nodes in other zones of the map; 0 = its own zone only.
 // Called on the bot's map thread.

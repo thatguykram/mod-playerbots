@@ -1119,16 +1119,17 @@ bool NewRpgBaseAction::HeadForStrandedGrind(WorldPosition const& dest)
         return true;
     }
 
-    TravelMgr::FlightMasterInfo const* from = sTravelMgr.GetNearestFlightMasterInfo(bot);
-    TravelMgr::FlightMasterInfo const* to = sTravelMgr.GetNearestFlightMasterInfo(bot->GetTeamId(), dest);
-    if (!from || !to || !from->taxiNodeId || !to->taxiNodeId || from->taxiNodeId == to->taxiNodeId ||
-        bot->GetExactDist(from->pos) + dest.GetExactDist(to->pos) > bot->GetExactDist(dest))
+    return FlyTowards(dest, "stranded");
+}
+
+bool NewRpgBaseAction::FlyTowards(WorldPosition const& dest, char const* why)
+{
+    TravelMgr::FlightMasterInfo const* from = nullptr;
+    std::vector<uint32> path;
+    if (!sTravelMgr.FlightShortcut(bot, dest, from, path))
         return false;
-    std::vector<uint32> path = sTravelNodeMap.FindTaxiPath(from->taxiNodeId, to->taxiNodeId);
-    if (path.empty())
-        return false;
-    LOG_DEBUG("playerbots", "[New RPG] Bot {} stranded, flies from node {} to node {} for ({},{})", bot->GetName(),
-              from->taxiNodeId, to->taxiNodeId, dest.GetPositionX(), dest.GetPositionY());
+    LOG_DEBUG("playerbots", "[New RPG] Bot {} {}, flies from node {} to node {} for ({},{})", bot->GetName(), why,
+              path.front(), path.back(), dest.GetPositionX(), dest.GetPositionY());
     botAI->rpgInfo.ChangeToTravelFlight(from->templateEntry, from->pos, std::move(path));
     return true;
 }
@@ -1262,6 +1263,8 @@ bool NewRpgBaseAction::RandomChangeStatus(std::vector<NewRpgStatus> candidateSta
             {
                 if (stranded && HeadForStrandedGrind(pos))
                     return true;
+                if (sTravelMgr.CrossesDeepWater(bot, pos) && FlyTowards(pos, "has the sea in the way"))
+                    return true;
                 botAI->rpgInfo.ChangeToGoGrind(pos);
                 return true;
             }
@@ -1272,6 +1275,8 @@ bool NewRpgBaseAction::RandomChangeStatus(std::vector<NewRpgStatus> candidateSta
             WorldPosition pos = SelectRandomCampPos(bot);
             if (pos != WorldPosition())
             {
+                if (sTravelMgr.CrossesDeepWater(bot, pos) && FlyTowards(pos, "has the sea in the way"))
+                    return true;
                 botAI->rpgInfo.ChangeToGoCamp(pos);
                 return true;
             }

@@ -5,7 +5,9 @@
  */
 
 #include "RandomPlayerbotMgr.h"
+#include "GameGraveyard.h"
 #include "PlayerbotHooks.h"
+#include "ReviveFromCorpseAction.h"
 
 KeepRandomBotGroupHook g_KeepRandomBotGroupHook = nullptr;
 #include "PlayerbotsDatabase.h"
@@ -1686,6 +1688,11 @@ void RandomPlayerbotMgr::RandomTeleport(Player* bot, std::vector<WorldLocation>&
                                    return i == sPlayerbotAIConfig.RandomBotMaps.end();
                                }),
                 tlocs.end());
+    // Nor anywhere too dangerous for the bot (the level-for-location tables only look at nearby creatures).
+    if (g_SafePlaceHook)
+        tlocs.erase(std::remove_if(tlocs.begin(), tlocs.end(), [bot](WorldPosition const& l)
+                                   { return !g_SafePlaceHook(bot, l.GetMapId(), l.GetPositionX(), l.GetPositionY()); }),
+                    tlocs.end());
     if (tlocs.empty())
     {
         LOG_DEBUG("playerbots", "Cannot teleport bot {} - all locations removed by filter", bot->GetName().c_str());
@@ -2213,9 +2220,15 @@ void RandomPlayerbotMgr::Refresh(Player* bot)
 
     if (bot->isDead())
     {
+        // Brought back where the ghost stands, which can be next to a body lost at sea or among mobs far above
+        // the bot (below the start-zone level nothing teleports it away after): the graveyard near its inn then.
+        bool safe = BotCanReviveAt(bot, bot->GetMapId(), bot->GetPositionX(), bot->GetPositionY(), bot->GetPositionZ());
         bot->ResurrectPlayer(1.0f);
         bot->SpawnCorpseBones();
         botAI->ResetStrategies(false);
+        if (!safe)
+            if (GraveyardStruct const* grave = HomeGraveyard(bot))
+                bot->TeleportTo(grave->Map, grave->x, grave->y, grave->z, bot->GetOrientation());
     }
 
     // if (sPlayerbotAIConfig.DisableRandomLevels)

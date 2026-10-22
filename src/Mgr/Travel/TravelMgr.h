@@ -876,6 +876,11 @@ public:
 
     FlightMasterInfo const* GetNearestFlightMasterInfo(Player* bot) const;
     FlightMasterInfo const* GetNearestFlightMasterInfo(TeamId team, WorldPosition const& pos) const;
+    // Does the straight line from the bot to dest cross deep (fatigue) water: the sea between Teldrassil and Darkshore.
+    bool CrossesDeepWater(Player* bot, WorldPosition const& dest) const;
+    // A flight from the flight master nearest the bot to the one nearest dest, when walking to the first and from
+    // the second is shorter than walking all the way. Fills the first flight master and the taxi path.
+    bool FlightShortcut(Player* bot, WorldPosition const& dest, FlightMasterInfo const*& from, std::vector<uint32>& path) const;
     std::vector<std::vector<uint32>> GetOptimalFlightDestinations(Player* bot);
     const std::vector<WorldLocation> GetTeleportLocations(Player* bot);
     const std::vector<WorldLocation> GetTravelHubs(Player* bot);

@@ -7,6 +7,7 @@
 #include "TravelMgr.h"
 #include "AreaDefines.h"
 #include "CellImpl.h"
+#include "GridTerrainData.h"
 #include "ChatHelper.h"
 #include "Corpse.h"
 #include "Creature.h"
@@ -4395,6 +4396,36 @@ TravelMgr::FlightMasterInfo const* TravelMgr::GetNearestFlightMasterInfo(TeamId 
     }
 
     return nearest;
+}
+
+bool TravelMgr::CrossesDeepWater(Player* bot, WorldPosition const& dest) const
+{
+    if (bot->GetMapId() != dest.GetMapId())
+        return false;
+    float length = bot->GetExactDist2d(dest.GetPositionX(), dest.GetPositionY());
+    uint32 steps = uint32(length / 40.0f);
+    for (uint32 i = 1; i < steps; ++i)
+    {
+        float t = float(i) / steps;
+        float x = bot->GetPositionX() + (dest.GetPositionX() - bot->GetPositionX()) * t;
+        float y = bot->GetPositionY() + (dest.GetPositionY() - bot->GetPositionY()) * t;
+        // From high above: the liquid type is reported wherever there is water over the ground.
+        if (bot->GetMap()->GetLiquidData(bot->GetPhaseMask(), x, y, 1000.0f, 0.0f, {}).Flags & MAP_LIQUID_TYPE_DARK_WATER)
+            return true;
+    }
+    return false;
+}
+
+bool TravelMgr::FlightShortcut(Player* bot, WorldPosition const& dest, FlightMasterInfo const*& from,
+                               std::vector<uint32>& path) const
+{
+    from = GetNearestFlightMasterInfo(bot);
+    FlightMasterInfo const* to = GetNearestFlightMasterInfo(bot->GetTeamId(), dest);
+    if (!from || !to || !from->taxiNodeId || !to->taxiNodeId || from->taxiNodeId == to->taxiNodeId ||
+        bot->GetExactDist(from->pos) + dest.GetExactDist(to->pos) > bot->GetExactDist(dest))
+        return false;
+    path = sTravelNodeMap.FindTaxiPath(from->taxiNodeId, to->taxiNodeId);
+    return !path.empty();
 }
 
 std::vector<uint32> TravelMgr::GetFlightNodesInZone(uint32 zoneId, TeamId team, uint32 excludeNode) const

@@ -9,7 +9,9 @@
 #include "Event.h"
 #include "FleeManager.h"
 #include "GameGraveyard.h"
+#include "GridTerrainData.h"
 #include "MapMgr.h"
+#include "PlayerbotHooks.h"
 #include "PlayerbotTextMgr.h"
 #include "Playerbots.h"
 #include "RandomPlayerbotMgr.h"
@@ -17,6 +19,28 @@
 
 // Top of the default start-zone brackets (Playerbots.ZoneBracket.*).
 constexpr uint32 START_ZONE_GRAVEYARD_MAX_LEVEL = 12;
+
+SafePlaceHook g_SafePlaceHook = nullptr;
+
+bool InDeepWater(Player* bot, uint32 mapId, float x, float y, float z)
+{
+    return bot->GetMapId() == mapId &&
+           (bot->GetMap()->GetLiquidData(bot->GetPhaseMask(), x, y, z, bot->GetCollisionHeight(), {}).Flags &
+            MAP_LIQUID_TYPE_DARK_WATER);
+}
+
+bool BotCanReviveAt(Player* bot, uint32 mapId, float x, float y, float z)
+{
+    return (!g_SafePlaceHook || g_SafePlaceHook(bot, mapId, x, y)) && !InDeepWater(bot, mapId, x, y, z);
+}
+
+GraveyardStruct const* HomeGraveyard(Player* bot)
+{
+    uint32 zoneId = sMapMgr->GetZoneId(PHASEMASK_NORMAL, bot->m_homebindMapId, bot->m_homebindX, bot->m_homebindY,
+                                       bot->m_homebindZ);
+    return sGraveyard->GetClosestGraveyard(bot->m_homebindMapId, bot->m_homebindX, bot->m_homebindY, bot->m_homebindZ,
+                                           bot->GetTeamId(), bot->m_homebindAreaId, zoneId, false);
+}
 
 bool ReviveFromCorpseAction::Execute(Event event)
 {
@@ -62,7 +86,9 @@ bool ReviveFromCorpseAction::Execute(Event event)
     {
         uint32 dCount = AI_VALUE(uint32, "death count");
 
-        if (dCount >= 5)
+        // Dying over and over, or the body is lost at sea: the spirit healer.
+        if (dCount >= 5 ||
+            InDeepWater(bot, corpse->GetMapId(), corpse->GetPositionX(), corpse->GetPositionY(), corpse->GetPositionZ()))
             return botAI->DoSpecificAction("spirit healer");
     }
 
@@ -100,16 +126,11 @@ bool FindCorpseAction::Execute(Event /*event*/)
 
     if (!botAI->HasGameClientMaster())
     {
-        if (dCount >= 5)
-        {
-            // LOG_INFO("playerbots", "Bot {} {}:{} <{}>: died too many times, was revived and teleported",
-            //     bot->GetGUID().ToString().c_str(), bot->GetTeamId() == TEAM_ALLIANCE ? "A" : "H", bot->GetLevel(),
-            //     bot->GetName().c_str());
-            context->GetValue<uint32>("death count")->Set(0);
-            // sRandomPlayerbotMgr.RandomTeleportForLevel(bot);
-            sRandomPlayerbotMgr.Revive(bot);
-            return true;
-        }
+        // Reviving at the body would kill it again (stock revived it on the spot, which below the start-zone
+        // level never teleports it away): the spirit healer instead.
+        if (dCount >= 5 ||
+            InDeepWater(bot, corpse->GetMapId(), corpse->GetPositionX(), corpse->GetPositionY(), corpse->GetPositionZ()))
+            return botAI->DoSpecificAction("spirit healer", Event(), true);
     }
 
     WorldPosition botPos(bot);
@@ -320,6 +341,16 @@ bool SpiritHealerAction::Execute(Event /*event*/)
 
     GraveyardStruct const* ClosestGrave =
         GetGrave(dCount > 10 || deadTime > 15 * MINUTE || AI_VALUE(uint8, "durability") < 10);
+    if (ClosestGrave && !BotCanReviveAt(bot, ClosestGrave->Map, ClosestGrave->x, ClosestGrave->y, ClosestGrave->z))
+    {
+        if (GraveyardStruct const* home = HomeGraveyard(bot))
+        {
+            LOG_DEBUG("playerbots", "Bot {} <{}> revives at the graveyard near its inn", bot->GetGUID().ToString(), bot->GetName());
+            ClosestGrave = home;
+        }
+    }
+    if (!ClosestGrave)
+        return false;
 
     if (bot->GetDistance2d(ClosestGrave->x, ClosestGrave->y) < sPlayerbotAIConfig.SightDistance)
     {
@@ -344,11 +375,6 @@ bool SpiritHealerAction::Execute(Event /*event*/)
                 return true;
             }
         }
-    }
-
-    if (!ClosestGrave)
-    {
-        return false;
     }
 
     bool moved = false;

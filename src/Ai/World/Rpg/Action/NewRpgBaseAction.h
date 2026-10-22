@@ -59,6 +59,8 @@ protected:
     bool GetQuestPOIPosAndObjectiveIdx(uint32 questId, std::vector<POIInfo>& poiInfo, bool toComplete = false);
     static WorldPosition SelectRandomGrindPos(Player* bot, bool* stranded = nullptr);
     bool HeadForStrandedGrind(WorldPosition const& dest);
+    // Fly when a flight shortens the way to dest; `why` goes in the log.
+    bool FlyTowards(WorldPosition const& dest, char const* why);
     static WorldPosition SelectRandomCampPos(Player* bot);
     bool SelectRandomFlightTaxiNode(uint32& flightMasterEntry, WorldPosition& flightMasterPos, std::vector<uint32>& path);
     bool RandomChangeStatus(std::vector<NewRpgStatus> candidateStatus);
